@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:objectstore="http://www.mulesoft.org/schema/mule/objectstore" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:context="http://www.springframework.org/schema/context" xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/objectstore http://www.mulesoft.org/schema/mule/objectstore/current/mule-objectstore.xsd">
+
+	<spring:beans>
+		<spring:bean id="sftpd" scope="singleton" class="com.mulesoft.template.mft.agent.SftpServer" name="SFTPD">
+            <spring:constructor-arg type="int" value="${mft.agent.sftpd.port}"/>
+            <spring:constructor-arg type="String" value="${mft.agent.sftpd.password}"/>
+            <spring:constructor-arg type="boolean" value="true"/>
+		</spring:bean>
+	</spring:beans>
+
+    <context:property-placeholder location="mft-agent.${mule.env}.properties"/>
+    <http:request-config name="MFT_API" host="${mft.controller.host}" port="${mft.controller.port}" basePath="${mft.controller.basePath}" doc:name="HTTP Request Configuration" protocol="${mft.controller.protocol}"/>
+    <http:listener-config name="Agent_HTTP_Listener" host="localhost" port="${mft.agent.http.port}" doc:name="HTTP Listener Configuration"/>
+    <objectstore:config name="metadata" persistent="true" doc:name="ObjectStore: Connector" partition="metadata"/>
+    <flow name="agent:register">
+        <http:listener config-ref="Agent_HTTP_Listener" path="/register" doc:name="/register"/>
+        <set-variable variableName="hname" value="${mft.agent.host}" doc:name="Get {mft.agent.host}"/>
+        <objectstore:contains config-ref="metadata" key="node" doc:name="Already Registered?"/>
+        <choice doc:name="Choice">
+            <when expression="#[payload]">
+                <objectstore:retrieve config-ref="metadata" key="node" doc:name="Extract Current MFT Metadata"/>
+                <json:json-to-object-transformer returnClass="java.util.HashMap" mimeType="application/java" doc:name="JSON to Object"/>
+                <http:request config-ref="MFT_API" path="/admin/node" method="PUT" doc:name="PUT:/admin/node Update Agent Registration Info">
+                    <http:request-builder>
+                        <http:query-param paramName="hostname" value="#[flowVars.hname == empty ? server.host : flowVars.hname]"/>
+                        <http:query-param paramName="port" value="${mft.agent.sftpd.port}"/>
+                        <http:query-param paramName="secret" value="${mft.agent.sftpd.password}"/>
+                        <http:query-param paramName="nodeId" value="#[payload.get('nodeId')]"/>
+                        <http:query-param paramName="displayname" value="${mft.agent.name}"/>
+                        <http:query-param paramName="agentroot" value="${mft.agent.dir.root}"/>
+                        <http:query-param paramName="username" value="mft"/>
+                        <http:header headerName="client_id" value="${mft.controller.client_id}"/>
+                        <http:header headerName="client_secret" value="${mft.controller.client_secret}"/>
+                        
+                    </http:request-builder>
+                </http:request>
+                <object-to-string-transformer doc:name="Object to String"/>
+            </when>
+            <otherwise>
+                <http:request config-ref="MFT_API" path="/admin/node" method="POST" doc:name="POST:/admin/node Initial Agent Registration">
+                    <http:request-builder>
+                        <http:query-param paramName="hostname" value="#[flowVars.hname == empty ? server.host : flowVars.hname]"/>
+                        <http:query-param paramName="port" value="${mft.agent.sftpd.port}"/>
+                        <http:query-param paramName="secret" value="${mft.agent.sftpd.password}"/>
+                        <http:query-param paramName="displayname" value="${mft.agent.name}"/>
+                        <http:query-param paramName="agentroot" value="${mft.agent.dir.root}"/>
+                        <http:query-param paramName="username" value="mft"/>
+                        <http:header headerName="client_id" value="${mft.controller.client_id}"/>
+                        <http:header headerName="client_secret" value="${mft.controller.client_secret}"/>
+                    </http:request-builder>
+                </http:request>
+                <object-to-string-transformer doc:name="Object to String"/>
+            </otherwise>
+        </choice>
+        <objectstore:store config-ref="metadata" key="node" value-ref="#[payload]" overwrite="true" doc:name="Store Updated Agent Metadata Locally"/>
+    </flow>
+    <flow name="agent:unregister">
+        <http:listener config-ref="Agent_HTTP_Listener" path="/unregister" doc:name="/unregister"/>
+        <objectstore:retrieve config-ref="metadata" key="node" doc:name="Extract Agent Metadata"/>
+        <json:json-to-object-transformer returnClass="java.util.HashMap" mimeType="application/java" doc:name="JSON to Object"/>
+        <http:request config-ref="MFT_API" path="/admin/node" method="DELETE" doc:name="DEL:/admin/node Remove Agent Registration">
+            <http:request-builder>
+                <http:query-param paramName="nodeId" value="#[payload.get('nodeId')]"/>
+            </http:request-builder>
+        </http:request>
+        <async doc:name="Async">
+            <objectstore:remove config-ref="metadata" key="node" ignoreNotExists="true" doc:name="Delete Agent Metadata Locally"/>
+        </async>
+    </flow>
+    <flow name="agent:pushFile" initialState="started">
+        <file:inbound-endpoint path="${mft.agent.dir.root}${mft.agent.dir.outbox}" pollingFrequency="${mft.agent.dir.upload.poll}" responseTimeout="10000" doc:name="Capture File">
+            <file:filename-regex-filter pattern="^((?!DS_Store).)*$" caseSensitive="true"/>
+        </file:inbound-endpoint>
+        <message-properties-transformer scope="invocation" doc:name="Message Properties">
+            <add-message-property key="fileName" value="#[message.inboundProperties.originalFilename]"/>
+            <add-message-property key="filePath" value="${mft.agent.dir.outbox}"/>
+        </message-properties-transformer>
+        <file:outbound-endpoint path="#[message.inboundProperties.directory]/processing" outputPattern="#[flowVars.fileName]" responseTimeout="10000" doc:name="File"/>
+        <enricher target="#[flowVars.node]" doc:name="Save Node">
+            <processor-chain doc:name="Get Metadata">
+                <objectstore:retrieve config-ref="metadata" key="node" doc:name="Extract Local Metadata"/>
+                <json:json-to-object-transformer doc:name="JSON to Object" returnClass="java.util.HashMap"/>
+            </processor-chain>
+        </enricher>
+        <http:request config-ref="MFT_API" path="/operation/file" method="GET" doc:name="Call MFT Contoller /mft/getFile">
+            <http:request-builder>
+                <http:query-param paramName="agentId" value="#[node.get('nodeId')]"/>
+                <http:query-param paramName="fileName" value="#[flowVars.fileName]"/>
+                <http:query-param paramName="agentPath" value="#[flowVars.filePath]/processing"/>
+                <http:query-param paramName="controllerPath" value="#[node.get('controllerRoot')]"/>
+                <http:header headerName="client_id" value="${mft.controller.client_id}"/>
+                <http:header headerName="client_secret" value="${mft.controller.client_secret}"/>
+                
+            </http:request-builder>
+        </http:request>
+    </flow>
+</mule>
