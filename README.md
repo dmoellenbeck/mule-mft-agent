@@ -17,13 +17,13 @@ After importing the template into Anypoint Studio and add all the ***.jar** in t
 ### Post-installation
 After the agent deployment with the properly configured resource file, run the following command from the localhost to register the agent against the controller:
 
-> curl http://localhost:<agent_port>/register
+> curl http://localhost:*agent_port*/register
 
 This command can be executed again **to update** the new agent parameter after changes in the properties file.
 
 To unregister the agent from the controller, run the command:
 
-> curl http://localhost:<agent_port>/unregister
+> curl http://localhost:*agent_port*/unregister
 
 ### Properties file sample
 ```sh
